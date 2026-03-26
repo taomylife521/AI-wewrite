@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CLI entry point for media-agent.
+CLI entry point for WeWrite.
 
 Usage:
     python cli.py preview article.md --theme professional-clean
@@ -25,7 +25,7 @@ CONFIG_PATHS = [
     Path.cwd() / "config.yaml",
     Path(__file__).parent.parent / "config.yaml",  # skill root
     Path(__file__).parent / "config.yaml",          # toolkit dir
-    Path.home() / ".config" / "media-agent" / "config.yaml",
+    Path.home() / ".config" / "wewrite" / "config.yaml",
 ]
 
 
@@ -144,7 +144,7 @@ def cmd_themes(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        prog="media-agent",
+        prog="wewrite",
         description="Markdown to WeChat HTML converter and publisher",
     )
     sub = parser.add_subparsers(dest="command", required=True)

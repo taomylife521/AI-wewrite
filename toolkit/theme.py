@@ -1,5 +1,5 @@
 """
-Theme system for media-agent.
+Theme system for WeWrite.
 
 Loads YAML theme definitions and provides CSS parsing utilities
 for the inline style converter.

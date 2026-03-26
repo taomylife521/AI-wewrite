@@ -26,7 +26,7 @@ SKILL_DIR = Path(__file__).parent.parent
 TOOLKIT_CONFIG_PATHS = [
     SKILL_DIR / "config.yaml",                      # skill root
     SKILL_DIR / "toolkit" / "config.yaml",           # toolkit dir
-    Path.home() / ".config" / "media-agent" / "config.yaml",
+    Path.home() / ".config" / "wewrite" / "config.yaml",
     Path.cwd() / "config.yaml",
 ]
 

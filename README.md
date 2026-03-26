@@ -1,4 +1,4 @@
-# media-agent
+# WeWrite
 
 公众号文章全流程 AI Skill —— 从热点抓取到草稿箱推送，一句话搞定。
 
@@ -28,13 +28,13 @@
 # 在你的 Claude Code 设置中添加 skill 路径
 
 # 方式 2：复制到 skills 目录
-cp -r media-agent ~/.claude/skills/media-agent
+cp -r wewrite ~/.claude/skills/wewrite
 ```
 
 ### 安装 Python 依赖
 
 ```bash
-cd media-agent
+cd wewrite
 pip install -r requirements.txt
 ```
 
@@ -52,7 +52,7 @@ cp config.example.yaml config.yaml
 ## 目录结构
 
 ```
-media-agent/
+wewrite/
 ├── SKILL.md              # Skill 主文件（Claude 读取并执行）
 ├── config.example.yaml   # 配置模板
 ├── requirements.txt      # Python 依赖

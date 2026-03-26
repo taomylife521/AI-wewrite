@@ -1,5 +1,5 @@
 ---
-name: media-agent
+name: wewrite
 description: |
   微信公众号内容全流程助手：热点抓取 → 选题 → 框架 → 写作 → SEO/去AI痕迹 → 视觉AI → 排版推送草稿箱。
   触发关键词：公众号、推文、微信文章、微信推文、草稿箱、微信排版、选题、热搜、
@@ -9,7 +9,7 @@ description: |
   需要有公众号/微信等明确上下文。
 ---
 
-# Media Agent — 公众号文章全流程
+# WeWrite — 公众号文章全流程
 
 ## 快速理解
 
