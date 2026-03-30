@@ -55,10 +55,23 @@ REAL_SOURCE_PATTERNS = [
 ]
 
 NEGATIVE_MARKERS = [
+    # 直接负面情绪
     "失望", "糟糕", "扯", "坑", "烂", "差劲", "崩溃", "吐槽", "骂",
     "怒", "烦", "焦虑", "担忧", "不满", "恶心", "可怕", "可悲", "可笑",
     "离谱", "尴尬", "无语", "蠢", "惨", "亏", "危",
+    # 绝望/迷茫
+    "绝望", "迷茫", "心累", "丧", "后悔", "后怕", "心寒",
+    # 欺骗/操控（隐性负面）
+    "骗", "忽悠", "割韭菜", "套路", "画大饼", "洗脑",
+    # 失败/徒劳
+    "白费", "白搭", "没戏", "黄了", "凉了", "废了",
+    # 自嘲/自贬
+    "傻", "天真", "吃亏", "自嗨", "打脸",
+    # 讽刺/反语
+    "呵呵", "好吧", "行吧", "真服了",
+    # 短语
     "太扯了", "说实话我很失望", "搞什么", "不靠谱", "受不了",
+    "受够了", "想哭", "伤心", "苦哈哈", "得过且过",
 ]
 
 COMMON_ADVERBS = [
@@ -69,10 +82,27 @@ COMMON_ADVERBS = [
     "竟然", "简直", "几乎", "完全", "绝对", "必然",
 ]
 
-COLD_WORDS = ["边际", "认知负荷", "信息不对称", "路径依赖", "商业模式", "生态系统", "增量"]
-WARM_WORDS = ["说白了", "其实吧", "讲真", "说实话", "坦白讲", "懂的都懂", "怎么说呢"]
-HOT_WORDS = ["DNA动了", "格局打开", "遥遥��先", "卷", "内卷", "炸了", "杀疯了", "吃灰"]
-WILD_WORDS = ["整挺好", "不靠谱", "瞎折腾", "搁这儿", "糊弄", "扯", "嗯"]
+COLD_WORDS = [
+    "边际", "认知负荷", "信息不对称", "路径依赖", "商业模式", "生态系统", "增量",
+    "技术栈", "标准化", "结构性", "规模化", "护城河", "飞轮", "闭环",
+    "赛道", "壁垒", "方法论", "底层逻辑", "第一性原理", "杠杆", "复利",
+    "ROI", "PMF", "代运营", "供给侧", "需求侧",
+]
+WARM_WORDS = [
+    "说白了", "其实吧", "讲真", "说实话", "坦白讲", "懂的都懂", "怎么说呢",
+    "老实说", "这么说吧", "你想啊", "别急", "慢慢来",
+    "有意思的是", "好玩的是", "巧的是", "说来话长", "话说回来",
+]
+HOT_WORDS = [
+    "DNA动了", "格局打开", "遥遥领先", "卷", "内卷", "炸了", "杀疯了", "吃灰",
+    "凡尔赛", "标题党", "躺平", "摆烂", "破防", "上头", "内耗",
+    "蒸发", "出圈", "降维打击", "弯道超车",
+]
+WILD_WORDS = [
+    "整挺好", "不靠谱", "瞎折腾", "搁这儿", "糊弄", "扯", "嗯",
+    "苦哈哈", "傻乎乎", "稀里糊涂", "得了吧", "算了吧",
+    "摔了跤", "交学费", "踩坑", "翻车", "栽了",
+]
 
 SELF_CORRECTION_PATTERNS = [
     r'不对[，,]', r'准确说', r'算了', r'说错了',
@@ -315,6 +345,81 @@ def run_tier(checks, text):
 
 
 # ============================================================
+# Calibration (bell-curve + over-optimization penalty)
+# ============================================================
+
+# Human article baselines (from 15 example articles, 2026-03-30)
+# Dimensions where AI over-optimizes: bell-curve scoring penalizes
+# both "too low" AND "too high" relative to human average.
+_BELL_CURVE_CHECKS = {
+    "broken_sentences": 0.39,
+    "self_correction": 0.20,
+    "sentence_length_range": 0.71,
+    "paragraph_length_variance": 0.52,
+    "banned_words": 0.73,
+}
+
+
+def _bell_curve(raw_score, center):
+    """Score peaks at center (human avg), penalizes over-optimization.
+
+    Below center: linear rise (as before).
+    Above center: quadratic penalty — too much is suspicious.
+    """
+    if center <= 0:
+        return raw_score
+    if raw_score <= center:
+        return raw_score / center
+    else:
+        overshoot = (raw_score - center) / (1.0 - center) if center < 1 else 0
+        return max(0.0, 1.0 - overshoot * overshoot)
+
+
+def calibrate_tiers(tier1, tier2):
+    """Apply bell-curve calibration and over-optimization penalty in-place."""
+    # 1. Bell-curve adjustment for over-optimizable dimensions
+    for tier in [tier1, tier2]:
+        for name, data in tier.items():
+            if name.startswith("_"):
+                continue
+            if name in _BELL_CURVE_CHECKS:
+                raw = data["score"]
+                center = _BELL_CURVE_CHECKS[name]
+                calibrated = round(max(0.0, min(1.0, _bell_curve(raw, center))), 4)
+                data["raw_score"] = raw
+                data["score"] = calibrated
+                data["detail"] += f" [calibrated from {raw:.2f}, center={center}]"
+
+    # 2. Over-optimization penalty: if 60%+ of checks score > 0.8,
+    #    the article is suspiciously "perfect" — apply global penalty.
+    all_scores = []
+    for tier in [tier1, tier2]:
+        for name, data in tier.items():
+            if not name.startswith("_"):
+                all_scores.append(data["score"])
+
+    high_count = sum(1 for s in all_scores if s > 0.8)
+    over_opt_ratio = high_count / len(all_scores) if all_scores else 0
+    penalty = 1.0
+    if over_opt_ratio >= 0.6:
+        penalty = 0.85  # 15% penalty for suspiciously perfect articles
+
+    if penalty < 1.0:
+        for tier in [tier1, tier2]:
+            for name, data in tier.items():
+                if not name.startswith("_"):
+                    data["score"] = round(data["score"] * penalty, 4)
+
+    # 3. Recalculate tier summaries
+    for tier in [tier1, tier2]:
+        scores = [data["score"] for name, data in tier.items() if not name.startswith("_")]
+        tier["_summary"]["mean_score"] = round(sum(scores) / len(scores), 4) if scores else 0
+        tier["_summary"]["scores"] = [round(s, 4) for s in scores]
+
+    return penalty
+
+
+# ============================================================
 # Composite Score
 # ============================================================
 
@@ -364,6 +469,7 @@ def score_article(text, verbose=False, tier3_score=None):
 
     tier1 = run_tier(TIER1_CHECKS, clean)
     tier2 = run_tier(TIER2_CHECKS, clean)
+    over_opt_penalty = calibrate_tiers(tier1, tier2)
     composite, weights = compute_composite(tier1, tier2, tier3_score)
     param_scores = build_param_scores(tier1, tier2)
 
@@ -377,6 +483,7 @@ def score_article(text, verbose=False, tier3_score=None):
         },
         "weights": weights,
         "param_scores": param_scores,
+        "over_optimization_penalty": over_opt_penalty,
         "char_count": len(clean),
     }
 

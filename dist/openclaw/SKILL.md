@@ -43,7 +43,7 @@ description: |
   2. 如果有 fail 项 → 直接报告，建议修复
   3. 如果全 pass 或仅 warn → 继续 LLM 深度分析：
      - 读取 `style.yaml` 的 tone/voice 与 writing_persona，判断是否矛盾
-     - 读取 `writing-config.yaml`（如存在），检查是否有 AI 特征参数（emotional_arc: flat、paragraph_rhythm: structured、closing_style: summary）
+     - 读取 `writing-config.yaml`（如存在），检查是否有 AI 特征参数（emotional_arc: flat、paragraph_rhythm: structured、closing_tendency: summary）
      - 读取 `history.yaml` 最近 5 篇，检查 persona 使用和 web_search 降级情况
   4. 综合输出自然语言报告 + 按优先级排序的改进建议
 - 用户说"优化写作参数"/"优化参数"/"跑优化" → 执行以下流程：
@@ -97,6 +97,7 @@ python3 -c "import markdown, bs4, cssutils, requests, yaml, pygments, PIL" 2>&1
 | Python 依赖 | 静默 | 提供 `pip install -r requirements.txt` |
 | `wechat.appid` + `secret` | 静默 | 设 `skip_publish = true` |
 | `image.api_key` | 静默 | 设 `skip_image_gen = true` |
+| `references/exemplars/index.yaml` | 静默 | 提示："范文库为空。如果你有已发布的文章（markdown），可以说**'导入范文'**建立风格库，写出来的文章会更像你。没有也不影响使用。" |
 
 **1.2 版本检查**（静默通过或提醒）：
 
@@ -189,6 +190,7 @@ web_search: "{选题关键词} 数据 报告 2025 2026"
 读取: {baseDir}/playbook.md（如果存在，按 confidence 分级执行）
 读取: {baseDir}/writing-config.yaml（如果存在，作为写作参数）
 读取: {baseDir}/history.yaml（最近 3 篇的 dimensions 字段）
+读取: {baseDir}/references/exemplars/index.yaml（如果存在）
 ```
 
 **4.1 历史最佳参数参考**（有 history.yaml 且包含 composite_score 时执行）：
@@ -208,17 +210,74 @@ web_search: "{选题关键词} 数据 报告 2025 2026"
 
 人格文件定义了：语气浓度、数据呈现方式、情绪弧线、段落节奏、不确定性表达模板等。作为 4.4 的硬性约束执行。
 
-**优先级**：playbook.md（confidence ≥ 5 的规则）> persona > writing-guide.md。writing-guide 是底线（禁用词等），persona 在此基础上特化风格参数，playbook 中高置信度规则是用户个性化的最终覆盖。playbook 中 confidence < 5 的规则作为软性参考。
+**优先级**：playbook.md（confidence ≥ 5 的规则）> persona > 范文风格 > writing-guide.md。writing-guide 是底线（禁用词等），范文提供风格示范（句长节奏、情绪表达方式），persona 在此基础上特化风格参数（语气浓度、数据呈现），playbook 中高置信度规则是用户个性化的最终覆盖。playbook 中 confidence < 5 的规则作为软性参考。
 
-**4.4 写文章**：
+**4.4 范文风格注入**（有 `references/exemplars/index.yaml` 时执行）：
+
+从 index.yaml 筛选 category 匹配当前框架类型的范文，按 humanness_score 升序（越低越人类）取 top 3。读取对应 .md 文件的片段内容。
+
+在写作 prompt 中注入：
+
+> 以下是该公众号风格的真实段落示例，模仿其句长节奏、情绪强度和口语化程度：
+>
+> 【开头风格】
+> {exemplar_1 的开头钩子段}
+>
+> 【情绪段风格】
+> {exemplar_2 的情绪高峰段}
+>
+> 【转折风格】
+> {exemplar_2 或 exemplar_3 的转折/自纠段（如有）}
+>
+> 【收尾风格】
+> {exemplar_3 的收尾段}
+
+Category 映射规则：
+
+| 框架类型 | exemplar category |
+|----------|-------------------|
+| 痛点型/深度解读 | tech-opinion |
+| 故事型 | story-emotional |
+| 清单型/对比型 | list-practical |
+| 热点解读型 | hot-take |
+| 其他 | general |
+
+如果匹配到的范文不足 3 篇，用 general category 补足。
+
+**Fallback（范文库为空时）**：读取 `{baseDir}/references/exemplar-seeds.yaml`，从每个段落类型中随机选 1 个注入 prompt。种子段落只示范人类写作的结构模式（句长方差、情绪锐度、自我纠正、非总结式收尾），不携带特定风格。注入时使用：
+
+> 以下是人类写作的结构模式示例，注意模仿其句长节奏和情绪表达方式（不要模仿具体内容或风格）：
+>
+> 【开头模式】{seeds.opening_hooks 随机 1 个}
+>
+> 【情绪段模式】{seeds.emotional_peaks 随机 1 个}
+>
+> 【转折模式】{seeds.transitions 随机 1 个}
+>
+> 【收尾模式】{seeds.closings 随机 1 个}
+
+建库命令：`python3 {baseDir}/scripts/extract_exemplar.py article.md`
+
+**4.5 写文章**：
 - H1 标题（20-28 字） + H2 结构，1500-2500 字
 - 真实素材锚定：Step 3.2 的素材分散嵌入各 H2 段落
 - **写作人格**：按 4.3 加载的人格参数写作（数据呈现方式、个人声音浓度、不确定性表达等）
+- **收尾方式**：persona 的 `closing_tendency` 仅作为倾向参考。根据文章内容和情绪弧线自行判断最自然的收尾方式（参见 writing-guide.md 收尾多样性表）。如果 history.yaml 中最近 3 篇有 `closing_type` 字段，避免使用相同的收尾类型
 - 3 层反检测规则（统计/语言/内容）在初稿阶段全部生效
 - 2-3 个编辑锚点：`<!-- ✏️ 编辑建议：在这里加一句你自己的经历/看法 -->`
 - 可选容器语法：`:::dialogue`、`:::timeline`、`:::callout`、`:::quote`
 
 保存到 `{baseDir}/output/{date}-{slug}.md`
+
+**4.6 快速自检**（写完后立即执行，减少 Step 5 重写概率）：
+
+对初稿做 3 项最易不达标的快速扫描，**当场修复**，不留到 Step 5：
+
+1. **禁用词扫描**：检查 writing-guide.md 2.1 的禁用词列表，命中的直接替换（最常见的问题，修复成本最低）
+2. **句长方差检查**：粗略扫描是否有连续 3 句以上长度接近的段落，有则拆句或加短句
+3. **负面情绪检查**：全文是否有 ≥ 2 处真实负面表达，不够则在编辑锚点附近补充
+
+这 3 项检查不需要调用脚本，LLM 自行完成即可。目标是让初稿在进入 Step 5 前已经消除最明显的问题。
 
 ---
 
@@ -249,7 +308,7 @@ web_search: "{选题关键词} 数据 报告 2025 2026"
 | 内容 | 密度波浪 | 高密度段后跟低密度段 | 3.3 |
 | 内容 | 维度贯穿 | 激活维度全文可见 | 3.4 |
 
-不通过 → 定向重写该段落。3 次仍不过 → 标注跳过。
+不通过 → **定向修复**：只替换不达标的具体句子/段落，不动已通过的部分。每轮最多改 3 处，改完立即重新检查该项。2 轮仍不过 → 标注跳过，继续下一项。
 
 **5.3 脚本验证**（补充逐项检查）：
 
@@ -261,8 +320,8 @@ python3 {baseDir}/scripts/humanness_score.py {article_path} --json --tier3 {agen
 
 解读 JSON 中 `composite_score`：
 - < 30 → 通过，继续 Step 6
-- 30-50 → 查看 `param_scores` 中最低分项，定向重写对应段落
-- \> 50 → 重大问题，逐个低分项修复，最多 3 轮
+- 30-50 → 查看 `param_scores` 中最低分的 1-2 项，只修复对应的具体句子（不重写整段），改完重新打分。1 轮即可
+- \> 50 → 取 `param_scores` 最低的 2-3 项，逐项定向修复（每项只改最相关的 1-2 处），最多 2 轮。仍 > 50 则标记 DONE_WITH_CONCERNS 继续
 
 ---
 
@@ -332,6 +391,7 @@ python3 {baseDir}/toolkit/cli.py preview {markdown} --theme {theme} --no-open -o
   writing_persona: "{人格名}"
   dimensions:
     - "{维度}: {选项}"
+  closing_type: "{收尾类型}"  # trailing_off/unanswered/scene_revert/abrupt_stop/anti_conclusion/image
   composite_score: {Step 5.3 的 composite_score}  # 0=人类, 100=AI
   writing_config_snapshot:  # 本次使用的关键参数（从 writing-config.yaml 提取）
     sentence_variance: {值}
@@ -366,6 +426,8 @@ python3 {baseDir}/toolkit/cli.py preview {markdown} --theme {theme} --no-open -o
 | 做一个小绿书/图片帖 | `python3 {baseDir}/toolkit/cli.py image-post img1.jpg img2.jpg -t "标题"` |
 | 诊断配置 / 检查反AI / 为什么AI检测没过 | `python3 {baseDir}/scripts/diagnose.py --json` + LLM 交叉分析 |
 | 优化写作参数 / 优化参数 | 迭代循环：写测试短文 → 打分 → 调参（见辅助功能） |
+| 导入范文 / 建范文库 | `python3 {baseDir}/scripts/extract_exemplar.py article.md` |
+| 查看范文库 | `python3 {baseDir}/scripts/extract_exemplar.py --list` |
 
 ---
 
@@ -380,7 +442,8 @@ python3 {baseDir}/toolkit/cli.py preview {markdown} --theme {theme} --no-open -o
 | 素材采集（web_search） | LLM 训练数据中可验证的公开信息 |
 | 维度随机化 | history 空时跳过去重 |
 | Persona 文件不存在 | 回退到 midnight-friend（默认） |
-| 去 AI 验证 | 3 次重写不过则跳过该项 |
+| 范文库为空 | Fallback 到 exemplar-seeds.yaml（通用模式） |
+| 去 AI 验证 | 2 轮定向修复不过则跳过该项 |
 | 生图失败 | 输出提示词 |
 | 推送失败 | 本地 HTML |
 | 历史写入 | 警告不阻断 |

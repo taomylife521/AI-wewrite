@@ -325,6 +325,20 @@ def main():
     lesson_file = save_lesson(diff_result, args.draft, args.final)
     print(f"\nLesson saved to: {lesson_file}")
 
+    # Auto-grow exemplar library from edited finals
+    final_title = extract_title(final)
+    try:
+        import extract_exemplar
+        exemplar = extract_exemplar.extract_exemplar(final, source=final_title or "user-edited")
+        if exemplar["humanness_score"] <= 50:
+            exemplar_path = extract_exemplar.save_exemplar(exemplar)
+            print(f"\n✓ 终稿已加入范文库: {exemplar_path}")
+            print(f"  Score: {exemplar['humanness_score']:.1f}/100, Category: {exemplar['category']}")
+        else:
+            print(f"\n⚠ 终稿 humanness_score={exemplar['humanness_score']:.1f} > 50，未加入范文库")
+    except Exception as e:
+        print(f"\n⚠ 范文提取跳过: {e}")
+
     lesson_count = len(load_all_lessons())
     print(f"Total lessons: {lesson_count}")
 

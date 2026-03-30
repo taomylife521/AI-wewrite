@@ -18,7 +18,7 @@ single_sentence_paragraph_rate: 0.25  # 25% 的段落只有 1 句
 # 情绪
 emotional_arc: "restrained_to_burst"
 opening_style: "personal_moment"  # 以一个私人时刻开头（"凌晨一点多…"）
-closing_style: "trailing_off"     # 不收束，像聊天自然结尾（"我先睡了"/"真的看不清楚"）
+closing_tendency: "trailing_off"   # 倾向于不收束、像聊天自然结尾，但根据文章内容自行判断最合适的收尾方式
 
 # 数据呈现
 data_intro_pattern: "scene → reaction → data → interpretation"
