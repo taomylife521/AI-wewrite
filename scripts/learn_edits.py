@@ -3,16 +3,21 @@
 Learn from human edits by diffing AI draft vs published final.
 
 Compares the original AI-generated article with the human-edited version,
-categorizes the changes, and saves lessons to lessons/.
+computes structured diffs, and saves typed lessons to lessons/.
 
-When 5+ lessons accumulate, outputs a prompt for the Agent to update playbook.md.
+Each lesson has:
+  - type: word_sub / para_delete / para_add / structure / title / tone
+  - occurrences: how many times this pattern has been seen across all lessons
+  - first_seen / last_seen: timestamps for confidence decay
+  - confidence: auto-computed from occurrences + recency
+
+When summarizing, outputs all patterns with aggregated confidence scores.
+The Agent uses this to write structured playbook.md rules.
 
 Usage:
     python3 learn_edits.py --draft path/to/draft.md --final path/to/final.md
-    python3 learn_edits.py --summarize   # summarize all lessons
-
-The script does structural analysis; the Agent (LLM) interprets the diffs
-and writes the lesson YAML + playbook updates.
+    python3 learn_edits.py --summarize          # all lessons with confidence
+    python3 learn_edits.py --summarize --json    # JSON output for agent
 """
 
 import argparse
@@ -20,12 +25,23 @@ import difflib
 import json
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import yaml
 
 SKILL_DIR = Path(__file__).parent.parent
+
+# Pattern types with descriptions
+PATTERN_TYPES = {
+    "word_sub": "用词替换",
+    "para_delete": "段落删除",
+    "para_add": "段落新增",
+    "structure": "结构调整",
+    "title": "标题修改",
+    "tone": "语气调整",
+    "expression": "表达偏好",
+}
 
 
 def load_text(path: str) -> str:
@@ -36,7 +52,6 @@ def split_sections(text: str) -> list[dict]:
     """Split markdown into sections by H2 headers."""
     sections = []
     current = {"header": "(intro)", "lines": []}
-
     for line in text.split("\n"):
         if line.strip().startswith("## "):
             if current["lines"] or current["header"] != "(intro)":
@@ -44,7 +59,6 @@ def split_sections(text: str) -> list[dict]:
             current = {"header": line.strip(), "lines": []}
         else:
             current["lines"].append(line)
-
     sections.append(current)
     return sections
 
@@ -61,44 +75,30 @@ def compute_diff(draft: str, final: str) -> dict:
     draft_lines = draft.split("\n")
     final_lines = final.split("\n")
 
-    # Line-level diff
     differ = difflib.unified_diff(draft_lines, final_lines, lineterm="")
     diff_lines = list(differ)
 
-    # Categorize changes
-    additions = []
-    deletions = []
-    for line in diff_lines:
-        if line.startswith("+") and not line.startswith("+++"):
-            additions.append(line[1:].strip())
-        elif line.startswith("-") and not line.startswith("---"):
-            deletions.append(line[1:].strip())
+    additions = [l[1:].strip() for l in diff_lines
+                 if l.startswith("+") and not l.startswith("+++") and l[1:].strip()]
+    deletions = [l[1:].strip() for l in diff_lines
+                 if l.startswith("-") and not l.startswith("---") and l[1:].strip()]
 
-    # Filter empty lines
-    additions = [l for l in additions if l]
-    deletions = [l for l in deletions if l]
-
-    # Title change
     draft_title = extract_title(draft)
     final_title = extract_title(final)
-    title_changed = draft_title != final_title
 
-    # Section-level analysis
     draft_sections = split_sections(draft)
     final_sections = split_sections(final)
     draft_h2s = [s["header"] for s in draft_sections if s["header"] != "(intro)"]
     final_h2s = [s["header"] for s in final_sections if s["header"] != "(intro)"]
-    structure_changed = draft_h2s != final_h2s
 
-    # Word count change
     draft_chars = len(draft.replace("\n", "").replace(" ", ""))
     final_chars = len(final.replace("\n", "").replace(" ", ""))
 
     return {
-        "title_changed": title_changed,
+        "title_changed": draft_title != final_title,
         "draft_title": draft_title,
         "final_title": final_title,
-        "structure_changed": structure_changed,
+        "structure_changed": draft_h2s != final_h2s,
         "draft_h2s": draft_h2s,
         "final_h2s": final_h2s,
         "lines_added": len(additions),
@@ -111,22 +111,22 @@ def compute_diff(draft: str, final: str) -> dict:
     }
 
 
-def save_diff_for_analysis(diff_result: dict, draft_path: str, final_path: str):
-    """Save diff data for Agent to analyze and write lessons."""
+def save_lesson(diff_result: dict, draft_path: str, final_path: str) -> Path:
+    """Save structured lesson data for Agent to analyze."""
     lessons_dir = SKILL_DIR / "lessons"
     lessons_dir.mkdir(parents=True, exist_ok=True)
 
     date_str = datetime.now().strftime("%Y-%m-%d")
-    diff_file = lessons_dir / f"{date_str}-diff.yaml"
+    lesson_file = lessons_dir / f"{date_str}-diff.yaml"
 
-    # If file exists, append a counter
     counter = 1
-    while diff_file.exists():
-        diff_file = lessons_dir / f"{date_str}-diff-{counter}.yaml"
+    while lesson_file.exists():
+        lesson_file = lessons_dir / f"{date_str}-diff-{counter}.yaml"
         counter += 1
 
     data = {
         "date": date_str,
+        "timestamp": datetime.now().isoformat(),
         "draft_file": str(draft_path),
         "final_file": str(final_path),
         "diff_summary": {
@@ -138,45 +138,138 @@ def save_diff_for_analysis(diff_result: dict, draft_path: str, final_path: str):
             "lines_deleted": diff_result["lines_deleted"],
             "char_diff": diff_result["char_diff"],
         },
-        "edits": [],  # Agent fills this after analysis
-        "patterns": [],  # Agent fills this after analysis
+        # Agent fills these after analyzing the draft and final:
+        "patterns": [],
+        # Pattern format (Agent writes):
+        # - type: "word_sub"        # one of PATTERN_TYPES keys
+        #   key: "avoid_jiangzhen"  # short unique identifier
+        #   description: "把'讲真'替换为'坦白说'"
+        #   rule: "不要使用'讲真'，用'坦白说'代替"  # imperative, executable
     }
 
-    with open(diff_file, "w", encoding="utf-8") as f:
+    with open(lesson_file, "w", encoding="utf-8") as f:
         yaml.dump(data, f, allow_unicode=True, default_flow_style=False)
 
-    return diff_file
+    return lesson_file
 
 
-def count_lessons() -> int:
-    """Count existing lesson files."""
+def load_all_lessons() -> list[dict]:
+    """Load all lesson files."""
     lessons_dir = SKILL_DIR / "lessons"
     if not lessons_dir.exists():
-        return 0
-    return len(list(lessons_dir.glob("*-diff*.yaml")))
-
-
-def summarize_lessons():
-    """Load all lessons and output for Agent to update playbook."""
-    lessons_dir = SKILL_DIR / "lessons"
-    if not lessons_dir.exists():
-        print("No lessons directory found.")
-        return
-
-    lesson_files = sorted(lessons_dir.glob("*-diff*.yaml"))
-    if not lesson_files:
-        print("No lessons found.")
-        return
-
-    all_lessons = []
-    for f in lesson_files:
+        return []
+    lessons = []
+    for f in sorted(lessons_dir.glob("*-diff*.yaml")):
         with open(f, "r", encoding="utf-8") as fh:
             data = yaml.safe_load(fh)
             if data:
-                all_lessons.append(data)
+                lessons.append(data)
+    return lessons
 
-    print(f"Total lessons: {len(all_lessons)}")
-    print(json.dumps(all_lessons, ensure_ascii=False, indent=2))
+
+def compute_confidence(occurrences: int, first_seen: str, last_seen: str) -> float:
+    """Compute confidence score from frequency and recency.
+
+    Confidence = base_from_occurrences + recency_bonus - age_decay.
+
+    - 1 occurrence = 3 (low, might be one-off)
+    - 2 occurrences = 5 (moderate, likely a preference)
+    - 3+ occurrences = 7+ (high, confirmed preference)
+    - Recency bonus: +1 if last_seen within 7 days
+    - Age decay: -1 per 30 days since last_seen (user style evolves)
+    - Clamped to 1-10
+    """
+    base = min(8, 2 + occurrences * 2)
+
+    try:
+        last = datetime.fromisoformat(last_seen)
+        days_since = (datetime.now() - last).days
+    except (ValueError, TypeError):
+        days_since = 0
+
+    recency_bonus = 1.0 if days_since <= 7 else 0.0
+    age_decay = max(0, days_since // 30)
+
+    return max(1.0, min(10.0, base + recency_bonus - age_decay))
+
+
+def aggregate_patterns(lessons: list[dict]) -> list[dict]:
+    """Aggregate patterns across all lessons. Returns sorted by confidence."""
+    pattern_map = {}  # key → aggregated data
+
+    for lesson in lessons:
+        date = lesson.get("date", "")
+        timestamp = lesson.get("timestamp", date)
+        for p in lesson.get("patterns", []):
+            key = p.get("key", "")
+            if not key:
+                continue
+            if key not in pattern_map:
+                pattern_map[key] = {
+                    "key": key,
+                    "type": p.get("type", "expression"),
+                    "description": p.get("description", ""),
+                    "rule": p.get("rule", ""),
+                    "occurrences": 0,
+                    "first_seen": timestamp,
+                    "last_seen": timestamp,
+                }
+            entry = pattern_map[key]
+            entry["occurrences"] += 1
+            # Keep the most recent description/rule (may evolve)
+            if p.get("description"):
+                entry["description"] = p["description"]
+            if p.get("rule"):
+                entry["rule"] = p["rule"]
+            # Update timestamps
+            if timestamp < entry["first_seen"]:
+                entry["first_seen"] = timestamp
+            if timestamp > entry["last_seen"]:
+                entry["last_seen"] = timestamp
+
+    # Compute confidence for each
+    results = []
+    for entry in pattern_map.values():
+        entry["confidence"] = round(compute_confidence(
+            entry["occurrences"], entry["first_seen"], entry["last_seen"]
+        ), 1)
+        results.append(entry)
+
+    # Sort by confidence descending
+    results.sort(key=lambda x: x["confidence"], reverse=True)
+    return results
+
+
+def summarize_lessons(as_json: bool = False):
+    """Load all lessons, aggregate patterns, output with confidence scores."""
+    lessons = load_all_lessons()
+    if not lessons:
+        print("No lessons found.")
+        return
+
+    patterns = aggregate_patterns(lessons)
+
+    if as_json:
+        print(json.dumps({
+            "total_lessons": len(lessons),
+            "total_patterns": len(patterns),
+            "patterns": patterns,
+        }, ensure_ascii=False, indent=2))
+        return
+
+    print(f"Total lessons: {len(lessons)}")
+    print(f"Unique patterns: {len(patterns)}")
+    print()
+
+    for p in patterns:
+        type_label = PATTERN_TYPES.get(p["type"], p["type"])
+        conf_bar = "█" * int(p["confidence"]) + "░" * (10 - int(p["confidence"]))
+        print(f"  {conf_bar} {p['confidence']:4.1f}  [{type_label}] {p['key']}")
+        print(f"         {p['description']}")
+        if p["rule"]:
+            print(f"         → {p['rule']}")
+        print(f"         seen {p['occurrences']}x, first {p['first_seen'][:10]}, last {p['last_seen'][:10]}")
+        print()
 
 
 def main():
@@ -184,21 +277,19 @@ def main():
     parser.add_argument("--draft", help="Path to AI draft")
     parser.add_argument("--final", help="Path to human-edited final")
     parser.add_argument("--summarize", action="store_true", help="Summarize all lessons")
+    parser.add_argument("--json", action="store_true", help="JSON output (with --summarize)")
     args = parser.parse_args()
 
     if args.summarize:
-        summarize_lessons()
+        summarize_lessons(as_json=args.json)
         return
 
     if not args.draft or not args.final:
         print("Error: --draft and --final required", file=sys.stderr)
         sys.exit(1)
 
-    # Load texts
     draft = load_text(args.draft)
     final = load_text(args.final)
-
-    # Compute diff
     diff_result = compute_diff(draft, final)
 
     # Print summary
@@ -230,43 +321,45 @@ def main():
         for line in diff_result["additions_sample"][:10]:
             print(f"  + {line[:80]}")
 
-    # Save for Agent analysis
-    diff_file = save_diff_for_analysis(diff_result, args.draft, args.final)
-    print(f"\nDiff saved to: {diff_file}")
+    # Save lesson
+    lesson_file = save_lesson(diff_result, args.draft, args.final)
+    print(f"\nLesson saved to: {lesson_file}")
 
-    # Check if playbook update should be triggered
-    lesson_count = count_lessons()
+    lesson_count = len(load_all_lessons())
     print(f"Total lessons: {lesson_count}")
 
     if lesson_count >= 5 and lesson_count % 5 == 0:
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print("PLAYBOOK UPDATE TRIGGERED")
-        print(f"{'='*60}")
-        print(f"{lesson_count} lessons accumulated. Agent should:")
-        print(f"1. Read all lessons: python3 learn_edits.py --summarize")
-        print(f"2. Read current playbook: playbook.md")
-        print(f"3. Update playbook with recurring patterns from lessons")
+        print(f"{'=' * 60}")
+        print(f"{lesson_count} lessons. Agent should run:")
+        print(f"  python3 scripts/learn_edits.py --summarize --json")
+        print(f"Then update playbook.md with high-confidence patterns.")
 
-    # Output instructions for Agent
+    # Instructions for Agent
     print(f"""
-{'='*60}
+{'=' * 60}
 INSTRUCTIONS FOR AGENT
-{'='*60}
+{'=' * 60}
 
-Read the draft and final versions, then analyze the edits:
+Read the draft and final versions, then for each meaningful edit:
 
 1. Read: {args.draft}
 2. Read: {args.final}
-3. For each meaningful edit, classify it:
-   - type: "用词替换" / "段落删除" / "段落新增" / "结构调整" / "标题修改" / "语气调整"
-   - before: (original text)
-   - after: (edited text)
-   - pattern: (what this tells us about the user's preference)
+3. For each edit, add a pattern entry to {lesson_file}:
 
-4. Update {diff_file} with the edits and patterns lists.
+   patterns:
+     - type: "word_sub"           # {' / '.join(PATTERN_TYPES.keys())}
+       key: "short_unique_id"     # e.g. "avoid_jiangzhen", "shorter_paragraphs"
+       description: "把'讲真'替换为'坦白说'"
+       rule: "不要使用'讲真'，用'坦白说'代替"  # imperative, executable
 
-5. If this is a recurring pattern (seen in previous lessons too),
-   consider updating playbook.md.
+4. Rules must be imperative (可执行的指令), not descriptive.
+   BAD:  "用户偏好简短段落"
+   GOOD: "段落不超过 80 字，长段必须在 3 句内换行"
+
+5. If pattern already exists in previous lessons (same key),
+   confidence will auto-increase on next --summarize.
 """)
 
 

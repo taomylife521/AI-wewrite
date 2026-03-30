@@ -1,15 +1,15 @@
 # 学习人工修改（核心飞轮）
 
-这是 WeWrite 最重要的长期价值。每次用户编辑文章后让系统学习，下一次的初稿就会更接近用户的风格，需要的编辑量越来越少。
+这是 WeWrite 最重要的长期价值。每次用户编辑文章后让系统学习，下一���的初稿就会更接近用户的风��，需要的编辑量越来越少。
 
-**飞轮效应**：初稿需要改 30% → 学习 5 次后只需改 15% → 学习 20 次后只需改 5%
+**飞轮效应**：初稿需要改 30% → 学习 5 次��只需改 15% → 学习 20 次后只需改 5%
 
 **触发**：用户说"我改了，学习一下"、"学习我的修改"
 
 ## 1. 获取 draft 和 final
 
-- **draft**：`output/` 下最新的 .md 文件（按修改时间排序，`ls -t output/*.md | head -1`）
-- **final**：用户提供修改后的版本。主动引导用户："请把你改好的文章全文粘贴给我，或者告诉我文件路径。如果你是在微信后台编辑器里改的，可以全选复制后直接粘贴到这里。"
+- **draft**：`output/` 下最新的 .md 文件（按修改时间排序���`ls -t output/*.md | head -1`）
+- **final**：用户提供修改后的版本。主动引��用��："请把你改好的文章全文粘贴给我，或��告诉我文件路径。如果你是在微信后台编辑器里改的，可以全选复制后直接粘贴到这里。"
 
 ## 2. 运行 diff 分析
 
@@ -17,35 +17,72 @@
 python3 {skill_dir}/scripts/learn_edits.py --draft {draft_path} --final {final_path}
 ```
 
-## 3. 分析并记录
+## 3. 分析并记�� pattern
 
-读取脚本输出的 diff 数据，对每个有意义的修改分类：
+读取脚本输���的 diff 数据和 INSTRUCTIONS FOR AGENT，对每个有意义的修改写入 pattern。
 
-- **用词替换**：AI 用了"讲真"，人工改成"坦白说"
-- **段落删除**：人工觉得某段多余
-- **段落新增**：人工补充了 AI 没写的内容
-- **结构调整**：H2 顺序或分段方式的变化
-- **标题修改**：标题风格偏好
-- **语气调整**：整体语气的偏移方向
+**每个 pattern 必须包含**：
+- `type`��`word_sub` / `para_delete` / `para_add` / `structure` / `title` / `tone` / `expression`
+- `key`：短唯一标识（英文，如 `avoid_jiangzhen`、`shorter_paragraphs`、`more_negative_emotion`）
+- `description`：这次修改是什么（如"把'讲真'替换为'坦白说'"）
+- `rule`：可执行的写作指令���**必须是祈使句，不是描述句**）
 
-将分类结果写入 `lessons/` 下的 diff YAML 文件的 edits 和 patterns 字段。
+**key 的复用**：如果这次的修改和之前某个 lesson 里的 pattern 是同一种偏好（比如又一次把段落改短了），使用**相同的 key**。这样 `--summarize` 时 occurrences 会累加���confidence 自动提升。
 
-## 4. 自动触发 Playbook 更新
+编辑 lesson YAML 文件中的 `patterns` 列表，写入分���结果。
 
-每积累 5 次 lessons，自动触发 playbook 更新：
+## 4. Playbook 更新
+
+每积累 5 次 lessons，触发 playbook 更新：
 
 ```bash
-python3 {skill_dir}/scripts/learn_edits.py --summarize
+python3 {skill_dir}/scripts/learn_edits.py --summarize --json
 ```
 
-脚本输出所有 lessons 的汇总数据。**Agent 必须执行以下步骤完成闭环**：
+读取 JSON 输出，按以下规则更新 `{skill_dir}/playbook.md`：
 
-1. 读取 summarize 输出，找出反复出现的 pattern（≥2 次）
-2. 读取当前 `{skill_dir}/playbook.md`（如果不存在则从零创建）
-3. **将 pattern 转化为可执行的写作规则**写入 playbook.md：
-   - 不要写"用户偏好简短段落"（描述性，不可执行）
-   - 要写"段落不超过 80 字，长段必须在 3 句内换行"（指令性，可执行）
-   - 每条规则必须是写作时能直接遵循的具体指令
-4. 保存 playbook.md
+### playbook.md 格式
 
-**验证闭环**：playbook.md 更新后，下次写作时"Playbook 优先"规则会自动加载新 pattern，初稿会反映用户偏好。
+playbook.md 是 YAML 格式，每条规则带 confidence 和元数据：
+
+```yaml
+# WeWrite Playbook — 从用户���辑中学习的写作规则
+# 由 Agent 自动���护，不要手动编辑
+# confidence ≥ 5 的规则在 Step 4 写作时作为硬性约束��行
+# confidence < 5 的规则作为软性参考
+
+rules:
+  - key: "shorter_paragraphs"
+    type: "expression"
+    rule: "段落不超过 80 字，长段必须在 3 句内换行"
+    confidence: 7.0
+    occurrences: 4
+    last_seen: "2026-03-28"
+
+  - key: "avoid_jiangzhen"
+    type: "word_sub"
+    rule: "不要使用'讲真'，用'坦白说'代替"
+    confidence: 5.0
+    occurrences: 2
+    last_seen: "2026-03-30"
+```
+
+### 更新规则
+
+1. **新增**：summarize 中出��了 playbook 里没有的 key → 直接添加
+2. **更新**：summarize 中的 confidence/occurrences/rule 比 playbook 里的新 → 用新值覆盖
+3. **保留**：playbook 中有但 summarize 中没有的规则 → 保留不动（可能是早期学到的，仍然��效）
+4. **衰减淘汰**：confidence < 2 的规则 → 删除（太旧或不再相关）
+
+## 5. Step 4 如何使用 playbook
+
+Step 4 写作时读取 playbook.md：
+
+- **confidence ≥ 5 的规则**：作为硬性约束执行（和 persona 同级）
+- **confidence 3-5 的规则**：作为软性参考（倾向遵循但不强制）
+- **confidence < 3 的规则**：忽略（可能已过时）
+
+这确保：
+- 用户反复确认的偏好（高 confidence）被严格执行
+- 只出现过一次的偏好（低 confidence）不��过度影响
+- 用户风格变化时，旧规则自然衰减退出

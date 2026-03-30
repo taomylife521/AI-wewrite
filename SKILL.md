@@ -198,7 +198,7 @@ WebSearch: "{选题关键词} 数据 报告 2025 2026"
 
 人格文件定义了：语气浓度、数据呈现方式、情绪弧线、段落节奏、不确定性表达模板等。作为 Step 4c 的硬性约束执行。
 
-**优先级**：playbook.md > persona > writing-guide.md。writing-guide 是底线（禁用词等），persona 在此基础上特化风格参数，playbook 是用户个性化的最终覆盖。
+**优先级**：playbook.md（confidence ≥ 5 的规则）> persona > writing-guide.md。writing-guide 是底线（禁用词等），persona 在此基础上特化风格参数，playbook 中高置信度规则是用户个性化的最终覆盖。playbook 中 confidence < 5 的规则作为软性参考。
 
 **4c. 写文章**：
 - H1 标题（20-28 字） + H2 结构，1500-2500 字
