@@ -5,12 +5,13 @@ AI image generation module for WeWrite.
 Supports multiple providers via a simple abstraction:
   - doubao-seedream (Volcengine Ark) — default, good for Chinese prompts
   - openai (DALL-E 3) — broad availability
+  - gemini (Google Gemini Imagen) — multimodal image generation
   - Custom providers via ImageProvider base class
 
 Usage as CLI:
     python3 image_gen.py --prompt "描述" --output cover.png
     python3 image_gen.py --prompt "描述" --output cover.png --size cover
-    python3 image_gen.py --prompt "描述" --output cover.png --provider openai
+    python3 image_gen.py --prompt "描述" --output cover.png --provider gemini
 
 Usage as module:
     from image_gen import generate_image
@@ -19,6 +20,7 @@ Usage as module:
 
 import abc
 import argparse
+import base64
 import json
 import sys
 from pathlib import Path
@@ -50,10 +52,10 @@ def _load_config() -> dict:
 # Article: 16:9 横版内文配图
 # Vertical: 9:16 竖版
 SIZE_PRESETS = {
-    "cover": {"doubao": "2952x1256", "openai": "1792x1024"},
-    "article": {"doubao": "2560x1440", "openai": "1792x1024"},
-    "vertical": {"doubao": "1088x2560", "openai": "1024x1792"},
-    "square": {"doubao": "2048x2048", "openai": "1024x1024"},
+    "cover": {"doubao": "2952x1256", "openai": "1792x1024", "gemini": "1792x1024"},
+    "article": {"doubao": "2560x1440", "openai": "1792x1024", "gemini": "1792x1024"},
+    "vertical": {"doubao": "1088x2560", "openai": "1024x1792", "gemini": "1024x1792"},
+    "square": {"doubao": "2048x2048", "openai": "1024x1024", "gemini": "1024x1024"},
 }
 
 MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
@@ -211,13 +213,62 @@ class OpenAIProvider(ImageProvider):
         return img_resp.content
 
 
+class GeminiProvider(ImageProvider):
+    """Google Gemini Imagen provider."""
+
+    provider_key = "gemini"
+
+    def __init__(self, api_key: str, model: str = "gemini-3.1-flash-image-preview",
+                 base_url: str = "https://generativelanguage.googleapis.com/v1beta"):
+        self._api_key = api_key
+        self._model = model
+        self._base_url = base_url
+
+    def generate(self, prompt: str, size: str) -> bytes:
+        # Append size instruction to prompt (Gemini doesn't have a native size param)
+        if "x" in size:
+            w, h = size.split("x", 1)
+            prompt = f"{prompt}\n\nGenerate this image at {w}x{h} resolution."
+
+        body = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
+        }
+        resp = requests.post(
+            f"{self._base_url}/models/{self._model}:generateContent",
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": self._api_key,
+            },
+            json=body,
+            timeout=120,
+        )
+        if resp.status_code != 200:
+            try:
+                error = resp.json().get("error", {})
+                msg = error.get("message", resp.text[:200])
+            except (ValueError, KeyError):
+                msg = resp.text[:200]
+            raise ValueError(f"Gemini API error ({resp.status_code}): {msg}")
+        data = resp.json()
+        candidates = data.get("candidates", [])
+        if not candidates:
+            raise ValueError("No candidates in Gemini response")
+        parts = candidates[0].get("content", {}).get("parts", [])
+        for part in parts:
+            inline_data = part.get("inlineData")
+            if inline_data and inline_data.get("mimeType", "").startswith("image/"):
+                return base64.b64decode(inline_data["data"])
+        raise ValueError(f"No image found in Gemini response parts")
+
+
 # --- Provider registry ---
 
 PROVIDERS = {
     "doubao": DoubaoProvider,
     "openai": OpenAIProvider,
+    "gemini": GeminiProvider,
 }
-
 
 def _build_provider(config: dict) -> ImageProvider:
     """Build an ImageProvider from config.yaml's image section."""
@@ -287,7 +338,7 @@ def generate_image(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate images using AI (doubao-seedream, OpenAI DALL-E, etc.)"
+        description="Generate images using AI (doubao-seedream, OpenAI DALL-E, Gemini Imagen, etc.)"
     )
     parser.add_argument("--prompt", required=True, help="Image generation prompt")
     parser.add_argument("--output", required=True, help="Output file path")
@@ -299,7 +350,7 @@ def main():
     parser.add_argument(
         "--provider",
         default=None,
-        help="Override provider (doubao, openai). Default: from config.yaml",
+        help="Override provider (doubao, openai, gemini). Default: from config.yaml",
     )
     args = parser.parse_args()
 

@@ -9,7 +9,7 @@ wechat:
 
 # AI 图片生成
 image:
-  # 可选 provider: doubao | openai
+  # 可选 provider: doubao | openai | gemini
   provider: "doubao"
   api_key: "your_api_key"
 
@@ -23,6 +23,12 @@ image:
   # api_key: "sk-..."
   # model: "dall-e-3"
   # base_url: "https://api.openai.com/v1"
+
+  # Google Gemini Imagen
+  # provider: "gemini"
+  # api_key: "AIza..."
+  # 获取 API key: https://aistudio.google.com/apikey
+  # model: "gemini-3.1-flash-image-preview"
 
 # 默认排版主题
 theme: "professional-clean"

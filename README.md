@@ -192,7 +192,7 @@ wewrite/
 │   ├── theme.py                # YAML 主题引擎
 │   ├── publisher.py            # 微信草稿箱 API + 小绿书图片帖
 │   ├── wechat_api.py           # access_token / 图片上传
-│   ├── image_gen.py            # AI 图片生成（doubao / OpenAI）
+│   ├── image_gen.py            # AI 图片生成（doubao / OpenAI / Gemini）
 │   └── themes/                 # 16+ 排版主题（含暗黑模式，可从文章学习新增）
 │
 ├── personas/                 # 5 套写作人格预设（含朱雀实测数据）
