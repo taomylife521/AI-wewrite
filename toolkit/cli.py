@@ -232,6 +232,15 @@ def cmd_gallery(args):
         webbrowser.open(f"file://{Path(output).absolute()}")
 
 
+def cmd_learn_theme(args):
+    """Learn a theme from a WeChat article URL."""
+    import subprocess
+    script = Path(__file__).parent.parent / "scripts" / "learn_theme.py"
+    cmd = [sys.executable, str(script), args.url, "--name", args.name]
+    result = subprocess.run(cmd)
+    sys.exit(result.returncode)
+
+
 def _gallery_sample_markdown():
     return """# 示例文章标题
 
@@ -397,6 +406,11 @@ def main():
     p_gallery.add_argument("-o", "--output", help="Output HTML file path")
     p_gallery.add_argument("--no-open", action="store_true", help="Don't open browser")
 
+    # learn-theme
+    p_learn = sub.add_parser("learn-theme", help="Learn formatting theme from a WeChat article URL")
+    p_learn.add_argument("url", help="WeChat article URL")
+    p_learn.add_argument("--name", required=True, help="Theme name")
+
     args = parser.parse_args()
 
     try:
@@ -410,6 +424,8 @@ def main():
             cmd_image_post(args)
         elif args.command == "gallery":
             cmd_gallery(args)
+        elif args.command == "learn-theme":
+            cmd_learn_theme(args)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)

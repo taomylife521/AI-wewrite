@@ -588,33 +588,59 @@ def _load_from_file(path: str):
 
 
 def main():
-    args = sys.argv[1:]
-    if not args:
-        print(__doc__)
-        sys.exit(0)
+    parser = argparse.ArgumentParser(
+        description="Learn a WeChat formatting theme from an article URL.",
+    )
+    parser.add_argument("url", help="WeChat article URL (https://mp.weixin.qq.com/s/...)")
+    parser.add_argument("--name", required=True, help="Theme name (used as filename and reference)")
+    parser.add_argument("--output-dir", default=None, help="Output directory (default: toolkit/themes/)")
+    args = parser.parse_args()
 
-    if args[0] == "--file" and len(args) >= 2:
-        content = _load_from_file(args[1])
-    else:
-        content = fetch_article(args[0])
+    # Validate name: only letters, digits, hyphens, underscores
+    if not re.match(r"^[a-zA-Z0-9_-]+$", args.name):
+        print("Error: --name must contain only letters, digits, hyphens, and underscores.", file=sys.stderr)
+        raise SystemExit(1)
 
-    print(f"Title: {content._wewrite_title}")
+    output_dir = Path(args.output_dir) if args.output_dir else THEMES_DIR
+    output_path = output_dir / f"{args.name}.yaml"
+
+    if output_path.exists():
+        print(f"Warning: {output_path} already exists, will be overwritten.", file=sys.stderr)
+
+    # Fetch
+    print("Fetching article...")
+    content = fetch_article(args.url)
+    title = getattr(content, "_wewrite_title", "")
+    if title:
+        print(f"Title: {title}")
+
+    # Extract
     grouped = extract_styles(content)
-    print("Elements with styles:")
-    for tag, styles in grouped.items():
-        if styles:
-            print(f"  <{tag}>: {len(styles)} elements")
+    styled_count = sum(len(v) for v in grouped.values())
+    print(f"Extracted {styled_count} styled elements.")
 
-    theme = analyze_styles(grouped)
-    print("\nInferred theme:")
-    for key, val in theme.items():
-        print(f"  {key}: {val}")
+    # Analyze
+    analyzed = analyze_styles(grouped)
 
-    # Dark mode
-    dm = derive_darkmode(theme)
-    print("\nDerived dark mode:")
-    for key, val in dm.items():
-        print(f"  {key}: {val}")
+    # Generate & write
+    theme_yaml = generate_theme_yaml(args.name, title, analyzed)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(theme_yaml, encoding="utf-8")
+
+    # Report
+    print()
+    print(f"Learned theme from: {title or args.url}")
+    print(f"  text:       {analyzed['text']}")
+    print(f"  text_light: {analyzed['text_light']}")
+    print(f"  primary:    {analyzed['primary']}")
+    print(f"  secondary:  {analyzed['secondary']}")
+    print(f"  background: {analyzed['background']}")
+    print(f"  font:       {analyzed['font_family'][:50]}")
+    print(f"  size:       {analyzed['font_size']} / line-height {analyzed['line_height']} / spacing {analyzed['letter_spacing']}")
+    print()
+    print(f"Theme saved → {output_path}")
+    print(f"Use it:  python3 toolkit/cli.py preview article.md --theme {args.name}")
+    print(f"Or set:  theme: {args.name}  in style.yaml")
 
 
 if __name__ == "__main__":
